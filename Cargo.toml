@@ -1,0 +1,16 @@
+[package]
+name = "accurecny"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = "0.4.38"
+clap = "4.5.17"
+clap_derive = "4.5.13"
+clio = {version = "0.3.5", features=["clap-parse"]}
+csv = "1.3.0"
+nix = { version="0.29.0", features=["socket", "net"]}
+pnet = "0.35.0"
+serde = { version = "1.0.210", features=["derive"]}
+slog = "2.7.0"
+slog-term = "2.9.1"
