@@ -575,12 +575,6 @@ fn accurate_ecn_tcp(
 
 #[tokio::main]
 async fn main() {
-    let myip = if let Ok(addr) = what_is_my_ip().await {
-        addr
-    } else {
-        get_unspecified_local_ip(&Mode::Ipv4).into()
-    };
-
     let args = Cli::parse();
 
     let log_level = if args.debug > 2 {
@@ -597,6 +591,12 @@ async fn main() {
         .filter_level(log_level)
         .fuse();
     let logger = slog::Logger::root(drain, slog::o!("version" => "0.5"));
+
+    let myip = if let Ok(addr) = what_is_my_ip(logger.clone()).await {
+        addr
+    } else {
+        get_unspecified_local_ip(&Mode::Ipv4).into()
+    };
 
     let potential_targets = if let Some(single_target) = args.target.target {
         Ok(vec![(0u64, single_target)])
