@@ -15,6 +15,7 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 use std::os::fd::AsRawFd;
+use std::str::FromStr;
 
 use clap::Parser;
 use clap_derive::Args;
@@ -129,6 +130,7 @@ impl std::fmt::Display for Target {
 
 #[derive(Debug, Clone)]
 enum Mode {
+    #[allow(unused)]
     Ipv6,
     Ipv4,
 }
@@ -156,6 +158,10 @@ struct Cli {
     /// Configure additional logging; repeat for more verbose output.
     #[arg(short, long, action = clap::ArgAction::Count)]
     debug: u8,
+
+    /// Override automatic detection of local IP address (only used for inclusion in results)
+    #[arg(long)]
+    myip: Option<IpAddr>,
 
     /// The name of a file to store the results.
     #[arg(long, value_parser = clap::value_parser!(clio::ClioPath))]
@@ -273,7 +279,7 @@ impl AccurecnyResults {
     }
 }
 
-fn resolve_target(target: Target, logger: slog::Logger) -> Result<(FlexibleIp), std::io::Error> {
+fn resolve_target(target: Target, logger: slog::Logger) -> Result<FlexibleIp, std::io::Error> {
     match target {
         Target::Name(name) => {
             let mut resolution_result: Result<FlexibleIp, std::io::Error> =
@@ -466,7 +472,7 @@ fn accurate_ecn_tcp(
         FlexibleIp::Ipv4(v4) => {
             ipv4_checksum(&pseudo_packet.consume_to_immutable(), &source.ip(), v4)
         }
-        FlexibleIp::Ipv6(v4) => {
+        FlexibleIp::Ipv6(_) => {
             panic!("Ipv6 is not supported.");
         }
     };
@@ -516,7 +522,9 @@ fn accurate_ecn_tcp(
             let event = epoll_event { events: 0, u64: 0 };
             let mut events = vec![event; 1];
 
+            info!(logger, "About to start waiting for an event!");
             let wait_result = epoll_wait(epoller, events.as_mut_ptr(), 1, 3000);
+            info!(logger, "Done waiting for an event!");
 
             // Whether the result was bad because it was a timeout or an error, it doesn't really matter.
             // We'll just move on.
@@ -602,10 +610,15 @@ async fn main() {
         .fuse();
     let logger = slog::Logger::root(drain, slog::o!("version" => "0.5"));
 
-    let myip = if let Ok(addr) = what_is_my_ip(logger.clone()).await {
-        addr
-    } else {
-        get_unspecified_local_ip(&Mode::Ipv4).into()
+    let myip = match args.myip {
+        Some(ip) => ip,
+        None => {
+            if let Ok(addr) = what_is_my_ip(logger.clone()).await {
+                addr
+            } else {
+                get_unspecified_local_ip(&Mode::Ipv4).into()
+            }
+        }
     };
 
     let potential_targets = if let Some(single_target) = args.target.target {
@@ -660,10 +673,9 @@ async fn main() {
 
         let target = resolution_result.unwrap();
 
-        let tcp_result =
-            accurate_ecn_tcp(&target.clone().into(), &canonical_target, logger.clone());
+        let tcp_result = accurate_ecn_tcp(&target.clone(), &canonical_target, logger.clone());
         let quic_result =
-            accurate_ecn_quic(&target.clone().into(), &canonical_target, logger.clone()).await;
+            accurate_ecn_quic(&target.clone(), &canonical_target, logger.clone()).await;
 
         results.add(AccurecnyResult::new(
             *rank,
