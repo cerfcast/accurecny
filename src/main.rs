@@ -553,13 +553,17 @@ fn accurate_ecn_tcp(
                 info!(logger, "The resulting flags: {:x}", tcp.flags);
                 tcp_test_result.flags =
                     Some(format!("0x{:02x}{:02x}", tcp.reserved, tcp.flags).to_string());
-                if tcp.flags & ACK != 0 &&                                           //                   2^3 2^2
+
+                // Turn off clippy here because this syntax/formatting is intentional.
+                #[allow(clippy::nonminimal_bool)]
+                if tcp.flags & ACK != 0 &&                                           //                   2^7 2^6
                     (                                                                //                AE CWR ECE
-                        ((tcp.reserved & 0x1) == 0 && (tcp.flags & 0x80) == 0x80) || // Table Row 1:    0   1   0
+                        ((tcp.reserved & 0x1) == 0 && (tcp.flags & 0xc0) == 0x80) || // Table Row 1:    0   1   0
                         ((tcp.reserved & 0x1) == 0 && (tcp.flags & 0xc0) == 0xc0) || // Table Row 2:    0   1   1
                         ((tcp.reserved & 0x1) == 1 && (tcp.flags & 0xc0) == 0x00) || // Table Row 3:    1   0   0
-                        ((tcp.reserved & 0x1) == 1 && (tcp.flags & 0x80) == 0x80)    // Table Row 4:    1   1   0
-                    ) {
+                        ((tcp.reserved & 0x1) == 1 && (tcp.flags & 0xc0) == 0x80)    // Table Row 4:    1   1   0
+                    )
+                {
                     tcp_test_result.supported = true;
                 }
             }
