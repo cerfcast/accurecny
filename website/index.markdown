@@ -7,6 +7,10 @@ layout: home
 
 Accurecny (a play on _accuracy_ and _ECN_) is a tool designed to measure the adoption of Accurate ECN on the Internet.
 
+**Latest Results:**
+
+As of [December 30, 2024](https://accurecny-data.pages.dev/), 4 sites _appear_ to support Accurate ECN in TCP: cisco.com, rubiconproject.com, yximgs.com, and aliyun.com. No sites _appear_ to support QUIC Accurate ECN. See below for more information on how to access all the data. 
+
 ### What is Accurate ECN?
 
 Far be it from me to answer this question. I'll let the experts describe it:
