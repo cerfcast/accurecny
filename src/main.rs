@@ -15,7 +15,6 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
 use std::os::fd::AsRawFd;
-use std::str::FromStr;
 
 use clap::Parser;
 use clap_derive::Args;
