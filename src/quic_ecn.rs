@@ -342,34 +342,18 @@ pub async fn accurate_ecn_quic(
     if conn.is_established() {
         quic_test_result.success = true;
 
-        let event_bytes = qlog_data.lock().unwrap().to_vec();
-        let reader = BufReader::new(event_bytes.as_slice());
-        let bx_reader = std::boxed::Box::new(reader);
-        let qlog_reader = QlogSeqReader::new(bx_reader).unwrap();
-
-        for i in qlog_reader {
-            if let Event::Qlog(events::Event {
-                data:
-                    EventData::TransportParametersSet(
-                        TransportParametersSet {
-                            owner: Some(TransportOwner::Remote),
-                            unknown_parameters: unknown,
-                            ..
-                        },
-                        ..,
-                    ),
-                ..
-            }) = i
-            {
-                for unk in unknown {
-                    println!("Unknown: {:?}", unk);
-                    if unk.id == 0x2051a5fa8648af {
-                        info!(
-                            logger,
-                            "Found that {} supports Accurate ECN over quic.\n", server_addr
-                        );
-                        quic_test_result.supported = true;
-                    }
+        if let Some(params) = conn.peer_transport_params() {
+            for param in params.unknown_params.into_iter() {
+                if param.is_reserved() {
+                    continue;
+                }
+                println!("Unknown: {:?}", param);
+                if param.id == 0x2051a5fa8648af {
+                    info!(
+                        logger,
+                        "Found that {} supports Accurate ECN over quic.\n", server_addr
+                    );
+                    quic_test_result.supported = true;
                 }
             }
         }
