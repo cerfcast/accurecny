@@ -9,7 +9,7 @@ Accurecny (a play on _accuracy_ and _ECN_) is a tool designed to measure the ado
 
 **Latest Results:**
 
-As of [January 13, 2025](https://accurecny-data.pages.dev/), 3 sites _appear_ to support Accurate ECN in TCP: cisco.com, rubiconproject.com, and yximgs.com. In the data set from [December 30, 2024](https://accurecny-data.pages.dev/), the data showed 4 such sites. We believe that the discrepancy can be explained by the "regressing" site's use of distributed architecture where some of their hosting providers support Accurate ECN and others do not.
+As of [January 20, 2025](https://accurecny-data.pages.dev/), at least some of the hosts serving 4 sites _appear_ to support Accurate ECN in TCP: aliyun.com, cisco.com, rubiconproject.com, and yximgs.com. See [The Data Dictionary](#the-data-dictionary) for more information on new information included in the results that resolves the open question from previous results (see [The Data Dictionary - Discussion](#the-data-dictionary---discussion))  for more information about "regressing" sites.
 
 No sites _appear_ to support QUIC Accurate ECN. See below for more information on how to access all the data. 
 
@@ -41,6 +41,22 @@ The data is available at [https://accurecny-data.pages.dev/](https://accurecny-d
 
 #### The Data Dictionary
 
+This data dictionary applies to all data and log files generated _after_ 2025-01-19.
+
+The data now contain information about the status of Accurate ECN deployment for _all_ the hosts serving each of the popular websites. Earlier versions of the data contained information about the status of Accurate ECN deployment for only _one_ of the hosts serving each of the popular websites.
+
+As a result, the data files _may_ contain multiple rows for the same host in the case where a query for the domain name returned multiple `A` (or `AAAA`) resource records in the answers.
+
+Otherwise, there is no change to the meaning of the individual fields in each row of the results.
+
+##### The Data Dictionary - Discussion
+
+The tool was updated to capture information about the status of Accurate ECN support for _all_ the hosts because of inconsistent results between different data collections.
+
+In particular, on [January 13, 2025](https://accurecny-data.pages.dev/), 3 sites appeared to support Accurate ECN in TCP: cisco.com, rubiconproject.com, and yximgs.com. However, in the data set from [December 30, 2024](https://accurecny-data.pages.dev/), 4 such sites seemed to support Accurate ECN in TCP. The discrepancy could be explained by the "regressing" site's use of distributed architecture where some of their hosting providers support Accurate ECN and others do not. Now that _all_ hosts are checked, such regressions should be more transparent.
+
+#### The (Deprecated) Data Dictionary
+
 This data dictionary applies to all data and log files generated _after_ 2024-10-01.
 
 Each of the data files is formatted as a [CSV](https://en.wikipedia.org/wiki/Comma-separated_values) file. Each row in the file contains data on the status of Accurate ECN support for one of the top 500 most popular sites on the Internet. 
@@ -60,7 +76,7 @@ From left to right, the fields are:
 | 9 | Whether or not the tool successfully made a determination about the site's support for Accurate ECN in QUIC. | Boolean |
 | 10 | Whether the site supports Accurate ECN in QUIC.[^2] | Boolean |
 
-#### The (Deprecated) Data Dictionary
+#### The (Really Deprecated) Data Dictionary
 
 This data dictionary applies to the _single_ pair of data and log file generated during a measurement on 2024-09-27.
 
