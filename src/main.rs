@@ -278,10 +278,10 @@ impl AccurecnyResults {
     }
 }
 
-fn resolve_target(target: Target, logger: slog::Logger) -> Result<FlexibleIp, std::io::Error> {
+fn resolve_target(target: Target, logger: slog::Logger) -> Result<Vec<FlexibleIp>, std::io::Error> {
     match target {
         Target::Name(name) => {
-            let mut resolution_result: Result<FlexibleIp, std::io::Error> =
+            let mut resolution_result: Result<Vec<FlexibleIp>, std::io::Error> =
                 Err(std::io::ErrorKind::ConnectionRefused.into());
 
             // Loop here -- we will try to resolve the www subdomain if a bare domain name does not
@@ -299,29 +299,28 @@ fn resolve_target(target: Target, logger: slog::Logger) -> Result<FlexibleIp, st
                     );
                     resolution_result = Err(std::io::ErrorKind::ConnectionRefused.into());
                 } else {
-                    let mut sv: Vec<SocketAddr> = vec![];
-                    server_ips.unwrap().for_each(|f| sv.push(f));
+                    let result: Vec<_> = server_ips
+                        .unwrap_or_default()
+                        .map(|ip| match ip.ip() {
+                            IpAddr::V4(addr) => FlexibleIp::Ipv4(addr),
+                            IpAddr::V6(addr) => FlexibleIp::Ipv6(addr),
+                        })
+                        .collect();
 
-                    let resolution_result_count = sv.len();
-                    let server_ip = sv[0];
-                    if resolution_result_count > 1 {
+                    if result.len() > 1 {
                         warn!(
-                        logger,
-                        "Warning: There were multiple IP addresses resolved from {:?}; using {:?}",
-                        name.clone(),
-                        server_ip.ip()
-                    );
+                            logger,
+                            "Warning: There were multiple IP addresses resolved from {:?}.",
+                            name.clone(),
+                        );
                     }
-                    resolution_result = match server_ip.ip() {
-                        IpAddr::V4(addr) => Ok(FlexibleIp::Ipv4(addr)),
-                        IpAddr::V6(addr) => Ok(FlexibleIp::Ipv6(addr)),
-                    };
+                    resolution_result = Ok(result);
                     break;
                 }
             }
             resolution_result
         }
-        Target::Ip(ip) => Ok(ip),
+        Target::Ip(ip) => Ok(vec![ip]),
     }
 }
 
@@ -672,17 +671,22 @@ async fn main() {
 
         let target = resolution_result.unwrap();
 
-        let tcp_result = accurate_ecn_tcp(&target.clone(), &canonical_target, logger.clone());
-        let quic_result =
-            accurate_ecn_quic(&target.clone(), &canonical_target, logger.clone()).await;
+        for target in target.into_iter() {
+            if let FlexibleIp::Ipv4(_) = target {
+                let tcp_result =
+                    accurate_ecn_tcp(&target.clone(), &canonical_target, logger.clone());
+                let quic_result =
+                    accurate_ecn_quic(&target.clone(), &canonical_target, logger.clone()).await;
 
-        results.add(AccurecnyResult::new(
-            *rank,
-            canonical_target,
-            myip,
-            tcp_result,
-            quic_result,
-        ));
+                results.add(AccurecnyResult::new(
+                    *rank,
+                    canonical_target.clone(),
+                    myip,
+                    tcp_result,
+                    quic_result,
+                ));
+            }
+        }
     }
 
     let mut csv_writer = csv::WriterBuilder::new()
