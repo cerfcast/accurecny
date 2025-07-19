@@ -9,7 +9,7 @@ Accurecny (a play on _accuracy_ and _ECN_) is a tool designed to measure the ado
 
 **Latest Results:**
 
-As of [April 30, 2025](https://accurecny-data.pages.dev/), at least some of the hosts serving 4 sites _appear_ to support Accurate ECN in TCP: aliyun.com, cisco.com, rubiconproject.com, and yximgs.com. See [The Data Dictionary](#the-data-dictionary) for more information on new information included in the results that resolves the open question from previous results (see [The Data Dictionary - Discussion](#the-data-dictionary---discussion))  for more information about "regressing" sites.
+As of [July 18, 2025](https://accurecny-data.pages.dev/), at least some of the hosts serving 4 sites _appear_ to support Accurate ECN in TCP: aliyun.com, cisco.com, rubiconproject.com, and yximgs.com. See [The Data Dictionary](#the-data-dictionary) for more information on new information included in the results that resolves the open question from previous results (see [The Data Dictionary - Discussion](#the-data-dictionary---discussion))  for more information about "regressing" sites.
 
 No sites _appear_ to support QUIC Accurate ECN. See below for more information on how to access all the data. 
 
