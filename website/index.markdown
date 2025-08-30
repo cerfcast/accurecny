@@ -1,7 +1,3 @@
----
-# Feel free to add content and custom Front Matter to this file.
-# To modify the layout, see https://jekyllrb.com/docs/themes/#overriding-theme-defaults
-
 layout: home
 ---
 
@@ -9,13 +5,13 @@ Accurecny (a play on _accuracy_ and _ECN_) is a tool designed to measure the ado
 
 **Latest Results:**
 
-As of [August 7, 2025](https://accurecny-data.pages.dev/), at least some of the hosts serving 4 sites _appear_ to support Accurate ECN in TCP: aliyun.com, cisco.com, rubiconproject.com, and yximgs.com. See [The Data Dictionary](#the-data-dictionary) for more information on new information included in the results that resolves the open question from previous results (see [The Data Dictionary - Discussion](#the-data-dictionary---discussion))  for more information about "regressing" sites.
+As of [August 30, 2025](https://accurecny-data.pages.dev/), at least some of the hosts serving 4 sites _appear_ to support Accurate ECN in TCP: aliyun.com, cisco.com, rubiconproject.com, and yximgs.com. On occasion, different machines will host the IPs queried for the sites and the test results will change. For instance, the hosts listed in responses from `ivi.ru` will sometimes report that they support Accurate ECN. In the latest data, they do not report.
 
-No sites _appear_ to support QUIC Accurate ECN. See below for more information on how to access all the data. 
+See below for more information on how to access all the data. 
 
 **Notable QUIC Results:**
 
-Over time, it appears that the number of sights that support QUIC is gradually increasing.
+Over time, it appears that the number of sites that support QUIC is gradually increasing. Of the 957 IP addresses that host the top 500 most popular websites on the Internet as of August 30, 2025, it was possible to establish a QUIC connection with 244.
 
 ### What is Accurate ECN?
 
@@ -38,6 +34,12 @@ Even if applications are (re)designed to leverage the [soon-to-be-widespread ado
 ### The Data
 
 The data available on this website provide a perspective on the deployment of Accurate ECN on the most popular websites on the Internet. Determination of what constitutes the _most popular websites on the Internet_ is made using data from [Tranco](https://tranco-list.eu/).
+
+Beginning with the data on August 30th, 2025, the determination of _most popular websites on the Internet_ is made the same day the data is collected. In other words, the set of sites polled when creating each set of data on/after August 30th, 2025 may differ. Prior to August 30th, 2025, the determination of _most popular websites on the Internet_ was made using the Tranco list from from [September 24th, 2024](https://tranco-list.eu/list/Z3J4G/1000000).
+
+The Tranco ranking is an incredible service and we are thankful to those who maintain it. Because the results published here are not reported in academic publication, there is no way to comply with their request that their work be cited when it is used. To make sure that it is _obvious_ that we owe them a huge debt of gratitude, the requested citation for their work is reproduced below:
+
+> Victor Le Pochat, Tom Van Goethem, Samaneh Tajalizadehkhoob, Maciej Korczyński, and Wouter Joosen. 2019. "Tranco: A Research-Oriented Top Sites Ranking Hardened Against Manipulation," Proceedings of the 26th Annual Network and Distributed System Security Symposium (NDSS 2019). https://doi.org/10.14722/ndss.2019.23386
 
 
 #### The Files
