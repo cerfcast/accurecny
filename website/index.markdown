@@ -13,7 +13,7 @@ to the top 500 most popular domain names on the Internet, according to Tranco ([
 
 **Latest Results:**
 
-The latest set of longitudinal data were collected on September 10th, 2025. See [The Data](#the-data) for all the details!
+The latest set of longitudinal data were collected on September 22nd, 2025. See [The Data](#the-data) for all the details!
 
 ### What is Accurate ECN?
 
