@@ -21,7 +21,7 @@ Far be it from me to answer this question. I'll let the experts describe it:
 
 > Explicit Congestion Notification (ECN) is a mechanism where network nodes can mark IP packets instead of dropping them to indicate incipient congestion to the endpoints. ... ECN was originally specified for TCP in such a way that only one feedback signal can be transmitted per Round-Trip Time (RTT). Recent new TCP mechanisms like Congestion Exposure (ConEx), Data Center TCP (DCTCP) or Low Latency, Low Loss, and Scalable Throughput (L4S) need more accurate ECN feedback information whenever more than one marking is received in one RTT. This document updates the original ECN specification in RFC 3168 to specify a scheme that provides more than one feedback signal per RTT in the TCP header. [^tcp-ecn]
 
-[^tcp-ecn]: [More Accurate Explicit Congestion Notification (ECN) Feedback in TCP](https://datatracker.ietf.org/doc/html/draft-ietf-tcpm-accurate-ecn-30)
+[^tcp-ecn]: [More Accurate Explicit Congestion Notification (ECN) Feedback in TCP](https://datatracker.ietf.org/doc/html/draft-ietf-tcpm-accurate-ecn-34)
 
 QUIC is a transport protocol that takes a different approach to connection establishment, congestion control, etc than TCP. QUIC is still a relatively new transport protocol. That said, researchers active in its development have already proposed the inclusion of a mechanism where _peers_ can share granular information about "incipient congestion". Again, I will quote from the experts:
 
