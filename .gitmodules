@@ -1,3 +1,6 @@
 [submodule "nix"]
 	path = nix
 	url = https://github.com/nix-rust/nix.git
+[submodule "quiche"]
+	path = quiche
+	url = https://github.com/hawkinsw/quiche.git
