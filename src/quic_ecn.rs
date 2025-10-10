@@ -1,23 +1,175 @@
-use std::io::{BufReader, Write};
+use std::fmt::{Debug, Display};
+use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 use mio::net::UdpSocket;
-use qlog::events::connectivity::TransportOwner;
-use qlog::events::quic::TransportParametersSet;
-use qlog::events::{self, EventData};
-use qlog::reader::{Event, QlogSeqReader};
-use quiche::{Config, ConnectionId};
+use quiche::{Config, ConnectionId, TransportParams};
 use ring::rand::{SecureRandom, SystemRandom};
+use serde::ser::SerializeStruct;
+use serde::Serialize;
 use slog::{error, info, Logger};
+use std::string::ToString;
 
 use crate::{get_unspecified_local_ip, FlexibleIp, Mode};
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone)]
+struct SerializableTransportParams(TransportParams);
+
+#[derive(Debug, Clone)]
 pub struct AccurecnyQuicResult {
     ip: Option<IpAddr>,
     success: bool,
-    supported: bool,
+    params: Option<SerializableTransportParams>,
+}
+
+impl Serialize for AccurecnyQuicResult {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut s = serializer.serialize_struct("AccurecnyQuicResult", 3)?;
+        s.serialize_field("ip", &self.ip)?;
+        s.serialize_field("success", &self.success)?;
+        s.serialize_field(
+            "params",
+            &self
+                .params
+                .as_ref()
+                .map(|params| params.to_string())
+                .unwrap_or("NA".to_string()),
+        )?;
+        s.end()
+    }
+}
+impl Display for SerializableTransportParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let v = &self.0;
+        write!(f, "{{")?;
+        write!(
+            f,
+            "\"original_destination_connection_id\": \"{}\",",
+            &v.original_destination_connection_id
+                .as_ref()
+                .map(|conn| format!("{conn:x?}"))
+                .unwrap_or("".to_string())
+        )?;
+        write!(f, "\"max_idle_timeout\": \"{}\",", &v.max_idle_timeout)?;
+        write!(
+            f,
+            "\"stateless_reset_token\": \"{}\",",
+            &v.stateless_reset_token
+                .map(|f| format!("{f:x}"))
+                .unwrap_or("".to_string())
+        )?;
+        write!(
+            f,
+            "\"max_udp_payload_size\": \"{}\",",
+            &v.max_udp_payload_size
+        )?;
+        write!(f, "\"initial_max_data\": \"{}\",", &v.initial_max_data)?;
+
+        write!(
+            f,
+            "\"initial_max_stream_data_bidi_local\": \"{}\",",
+            &v.initial_max_stream_data_bidi_local,
+        )?;
+        write!(
+            f,
+            "\"initial_max_stream_data_bidi_remote\": \"{}\",",
+            &v.initial_max_stream_data_bidi_remote
+        )?;
+        write!(
+            f,
+            "\"initial_max_stream_data_uni\": \"{}\",",
+            &v.initial_max_stream_data_uni
+        )?;
+        write!(
+            f,
+            "\"initial_max_streams_bidi\": \"{}\",",
+            &v.initial_max_streams_bidi
+        )?;
+        write!(
+            f,
+            "\"initial_max_streams_uni\": \"{}\",",
+            &v.initial_max_streams_uni
+        )?;
+        write!(f, "\"ack_delay_exponent\": \"{}\",", &v.ack_delay_exponent)?;
+        write!(f, "\"max_ack_delay\": \"{}\",", &v.max_ack_delay)?;
+        write!(
+            f,
+            "\"disable_active_migration\": \"{}\",",
+            &v.disable_active_migration
+        )?;
+        write!(
+            f,
+            "\"active_conn_id_limit\": \"{}\",",
+            &v.active_conn_id_limit
+        )?;
+
+        write!(
+            f,
+            "\"initial_source_connection_id\": \"{}\",",
+            &v.initial_source_connection_id
+                .as_ref()
+                .map(|conn| format!("{conn:?}"))
+                .unwrap_or("".to_string())
+        )?;
+
+        write!(
+            f,
+            "\"retry_source_connection_id\": \"{}\",",
+            &v.retry_source_connection_id
+                .as_ref()
+                .map(|conn| format!("{conn:?}"))
+                .unwrap_or("".to_string())
+        )?;
+        write!(
+            f,
+            "\"max_datagram_frame_size\": \"{}\",",
+            &v.max_datagram_frame_size.unwrap_or_default()
+        )?;
+
+        write!(
+            f,
+            "\"version_information\": \"{}\",",
+            &v.version_information
+                .as_ref()
+                .map(|(a, b)| format!(
+                    "{:x}, [{}]",
+                    a,
+                    b.as_ref()
+                        .map(|f| f
+                            .iter()
+                            .map(|f| format!("{:x}", f))
+                            .collect::<Vec<_>>()
+                            .join(","))
+                        .unwrap_or_default()
+                ))
+                .unwrap_or("".to_string())
+        )?;
+        write!(
+            f,
+            "\"unknown_params\": {{ {} }}",
+            &v.unknown_params
+                .as_ref()
+                .map(|conn| {
+                    conn.parameters
+                        .iter()
+                        .fold("".to_string(), |existing, next| {
+                            let serialized_unknown_param =
+                                format!("\"{:x?}\": {:?}", next.id, next.value);
+                            if !existing.is_empty() {
+                                format!("{existing}, {serialized_unknown_param}")
+                            } else {
+                                serialized_unknown_param
+                            }
+                        })
+                })
+                .unwrap_or_default()
+        )?;
+        write!(f, "}}")
+    }
 }
 
 impl AccurecnyQuicResult {
@@ -25,7 +177,7 @@ impl AccurecnyQuicResult {
         Self {
             ip: None,
             success: false,
-            supported: false,
+            params: None,
         }
     }
 }
@@ -103,6 +255,8 @@ pub async fn accurate_ecn_quic(
         config.set_max_connection_window(25165824);
         config.set_max_stream_window(16777216);
         config.enable_track_unknown_transport_parameters(1024);
+        config.set_version_information(Some((1, None)));
+        config.log_keys();
         config
     }
 
@@ -156,6 +310,13 @@ pub async fn accurate_ecn_quic(
     // Create a QUIC connection and initiate handshake.
     let mut conn =
         quiche::connect(Some(name), &scid, local_addr, server_addr, &mut config).unwrap();
+
+    let keylog_writer = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("quic.key")
+        .unwrap();
+    conn.set_keylog(Box::new(keylog_writer));
 
     let qlog_data: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(vec![]));
     let round_tripper = std::boxed::Box::new(QlogRoundtripper {
@@ -342,21 +503,9 @@ pub async fn accurate_ecn_quic(
     if conn.is_established() {
         quic_test_result.success = true;
 
-        if let Some(params) = conn.peer_transport_params() {
-            for param in params.unknown_params.into_iter() {
-                if param.is_reserved() {
-                    continue;
-                }
-                println!("Unknown: {:?}", param);
-                if param.id == 0x2051a5fa8648af {
-                    info!(
-                        logger,
-                        "Found that {} supports Accurate ECN over quic.\n", server_addr
-                    );
-                    quic_test_result.supported = true;
-                }
-            }
-        }
+        quic_test_result.params = conn
+            .peer_transport_params()
+            .map(|f| SerializableTransportParams(f.clone()));
     }
 
     conn.close(false, 0x0, "Test complete.".as_bytes()).unwrap();
