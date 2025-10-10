@@ -21,8 +21,7 @@ use clap_derive::Args;
 use myip::what_is_my_ip;
 use nix::errno::Errno;
 use nix::libc::{
-    epoll_create, epoll_ctl, epoll_event, epoll_wait, EPOLLERR, EPOLLHUP, EPOLLIN, EPOLLPRI,
-    EPOLLRDHUP, EPOLL_CTL_ADD,
+    epoll_create, epoll_ctl, epoll_event, epoll_wait, EPOLLERR, EPOLLHUP, EPOLLIN, EPOLLPRI, EPOLLRDHUP, EPOLL_CTL_ADD
 };
 use nix::sys::socket::AddressFamily::Inet;
 use nix::sys::socket::SockProtocol::{self, Tcp as TcpProto};
@@ -33,13 +32,14 @@ use nix::sys::socket::{
 use nix::sys::socket::{connect, recv, SockaddrIn};
 use pnet::packet::tcp::{ipv4_checksum, Tcp, TcpFlags, TcpOption, TcpOptionPacket, TcpPacket};
 use quic_ecn::{accurate_ecn_quic, AccurecnyQuicResult};
+use rand::distr::{Distribution, Uniform};
 
 use std::time::Duration;
 
 use pnet::packet::tcp::MutableTcpPacket;
 use pnet::packet::tcp::TcpFlags::{ACK, SYN};
 use pnet::packet::FromPacket;
-use slog::{error, info, warn, Drain};
+use slog::{error, info, warn, Drain, Logger};
 
 mod myip;
 mod quic_ecn;
@@ -98,6 +98,7 @@ impl From<FlexibleIp> for SocketAddr {
     }
 }
 
+#[allow(dead_code)]
 enum AccurecnyError {
     Errno(Errno),
     Other(std::io::Error),
@@ -118,6 +119,20 @@ enum Target {
     Name(String),
 }
 
+#[derive(Debug, Clone)]
+struct IpRangeRatio {
+    pub start: FlexibleIp,
+    pub stop: FlexibleIp,
+    pub ratio: f64,
+}
+
+#[derive(Debug, Clone)]
+enum TargetDescriptor {
+    Range(IpRangeRatio),
+    Ip(FlexibleIp),
+    Name(String),
+}
+
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -134,13 +149,33 @@ enum Mode {
     Ipv4,
 }
 
-fn parse_target(arg: &str) -> Result<Target, String> {
-    match arg.parse() {
-        Ok(addr) => match addr {
-            IpAddr::V4(addr) => Ok(Target::Ip(FlexibleIp::Ipv4(addr))),
-            IpAddr::V6(addr) => Ok(Target::Ip(FlexibleIp::Ipv6(addr))),
+fn parse_target(arg: &str) -> Result<TargetDescriptor, String> {
+    // First, if the target has a - and an @ in it, then we will try to parse it as a range.
+    // It might turn out to be a filename, but we'll try it this way!
+    match if let Some((one, two, three)) = arg.split_once("@").and_then(|v| {
+        v.0.split_once("-")
+            .map(|sv| (sv.0.to_string(), sv.1.to_string(), v.1.to_string()))
+    }) {
+        println!("Contains?");
+        Some((one.parse::<IpAddr>(), two.parse::<IpAddr>(), three.parse()))
+    } else {
+        None
+    } {
+        Some((Ok(start), Ok(stop), Ok(ratio))) => {
+            println!("Found a range!");
+            Ok(TargetDescriptor::Range(IpRangeRatio {
+                start: start.into(),
+                stop: stop.into(),
+                ratio,
+            }))
+        }
+        _ => match arg.parse() {
+            Ok(addr) => match addr {
+                IpAddr::V4(addr) => Ok(TargetDescriptor::Ip(FlexibleIp::Ipv4(addr))),
+                IpAddr::V6(addr) => Ok(TargetDescriptor::Ip(FlexibleIp::Ipv6(addr))),
+            },
+            Err(_) => Ok(TargetDescriptor::Name(arg.to_string())),
         },
-        Err(_) => Ok(Target::Name(arg.to_string())),
     }
 }
 
@@ -183,7 +218,7 @@ struct Cli {
 struct TargetArgs {
     /// A single hostname or IP address to test for Accurate ECN support.
     #[arg(long, value_parser = parse_target)]
-    target: Option<Target>,
+    target: Option<TargetDescriptor>,
 
     /// The path to the file containing  list of hostnames or IP addresses to test for Accurate ECN support.
     #[clap(long, value_parser = clap::value_parser!(clio::ClioPath).exists())]
@@ -237,7 +272,7 @@ struct AccurecnyResult {
     quic: AccurecnyQuicResult,
 }
 
-const RESULT_CSV_HEADER: &str = "source, rank, url, tcp_ip, tcp_success, tcp_supported, tcp_flags, quic_ip, quic_success, quic_supported\n";
+const RESULT_CSV_HEADER: &str = "source, rank, url, tcp_ip, tcp_success, tcp_supported, tcp_flags, quic_ip, quic_success, transport_params\n";
 
 impl AccurecnyResult {
     fn new(
@@ -310,8 +345,9 @@ fn resolve_target(target: Target, logger: slog::Logger) -> Result<Vec<FlexibleIp
                     if result.len() > 1 {
                         warn!(
                             logger,
-                            "Warning: There were multiple IP addresses resolved from {:?}.",
+                            "Warning: There were multiple IP addresses resolved from {:?}: {:?}.",
                             name.clone(),
+                            result,
                         );
                     }
                     resolution_result = Ok(result);
@@ -547,6 +583,7 @@ fn accurate_ecn_tcp(
                 let result =
                     recv(raw_socket.as_raw_fd(), &mut result_bytes, MsgFlags::empty()).unwrap();
 
+                tcp_test_result.success = true;
                 let tcp_bytes = result_bytes
                     [pnet::packet::ipv4::Ipv4Packet::minimum_packet_size()..result]
                     .to_vec();
@@ -563,11 +600,16 @@ fn accurate_ecn_tcp(
                 // Turn off clippy here because this syntax/formatting is intentional.
                 #[allow(clippy::nonminimal_bool)]
                 if tcp.flags & ACK != 0 &&                                           //                   2^7 2^6
-                    (                                                                //                AE CWR ECE
-                        ((tcp.reserved & 0x1) == 0 && (tcp.flags & 0xc0) == 0x80) || // Table Row 1:    0   1   0
-                        ((tcp.reserved & 0x1) == 0 && (tcp.flags & 0xc0) == 0xc0) || // Table Row 2:    0   1   1
-                        ((tcp.reserved & 0x1) == 1 && (tcp.flags & 0xc0) == 0x00) || // Table Row 3:    1   0   0
-                        ((tcp.reserved & 0x1) == 1 && (tcp.flags & 0xc0) == 0x80)    // Table Row 4:    1   1   0
+                    (                                                                //                AE CWR ECE (Expected output in results file)
+                        ((tcp.reserved & 0x1) == 0 && (tcp.flags & 0xc0) == 0x80) || // Table Row 1:    0   1   0 (0x0092)
+                        ((tcp.reserved & 0x1) == 0 && (tcp.flags & 0xc0) == 0xc0) || // Table Row 2:    0   1   1 (0x00d2)
+                        ((tcp.reserved & 0x1) == 1 && (tcp.flags & 0xc0) == 0x00) || // Table Row 3:    1   0   0 (0x0112)
+                        ((tcp.reserved & 0x1) == 1 && (tcp.flags & 0xc0) == 0x80)    // Table Row 4:    1   1   0 (0x0192)
+                                                                                     //                               ^ ^
+                                                                                     //                              AE SYN
+                                                                                     //                                ^
+                                                                                     //                               CWR/ECE/ACK
+
                     )
                 {
                     tcp_test_result.supported = true;
@@ -585,8 +627,60 @@ fn accurate_ecn_tcp(
             }
         }
     }
-    tcp_test_result.success = true;
     tcp_test_result
+}
+
+fn generate_targets_from_range(
+    range: IpRangeRatio,
+    logger: Logger,
+) -> Result<Vec<(u64, Target)>, std::io::Error> {
+    info!(logger, "Generating targets from a range!");
+    match range {
+        IpRangeRatio {
+            start: FlexibleIp::Ipv4(start),
+            stop: FlexibleIp::Ipv4(stop),
+            ratio,
+        } => {
+            let startn = u32::from_be_bytes(start.octets());
+            let stopn = u32::from_be_bytes(stop.octets());
+
+            let between = Uniform::try_from(0f64..=1f64).unwrap();
+            let mut rng = rand::rng();
+            Ok((startn..stopn)
+                .filter(|v| {
+                    let r: f64 = between.sample(&mut rng);
+                    if r < ratio {
+                        info!(
+                            logger,
+                            "Keeping {} because {r} < {ratio}",
+                            Into::<IpAddr>::into(v.to_be_bytes())
+                        );
+                        true
+                    } else {
+                        //info!(logger, "Skipping {v} because {r} < {ratio}");
+                        false
+                    }
+                })
+                .map(|v| (0, Target::Ip(Into::<IpAddr>::into(v.to_be_bytes()).into())))
+                .collect())
+        }
+        IpRangeRatio {
+            start: FlexibleIp::Ipv6(_),
+            stop: FlexibleIp::Ipv6(_),
+            ratio: _,
+        } => {
+            error!(logger, "IPv6 is not implemented.\n");
+            Err(std::io::ErrorKind::AddrNotAvailable.into())
+        }
+        IpRangeRatio {
+            start: _,
+            stop: _,
+            ratio: _,
+        } => {
+            error!(logger, "Cannot mix Ipv4 and IPv6 addresses in range.\n");
+            Err(std::io::ErrorKind::AddrNotAvailable.into())
+        }
+    }
 }
 
 #[tokio::main]
@@ -607,20 +701,12 @@ async fn main() {
         .filter_level(log_level)
         .fuse();
     let logger = slog::Logger::root(drain, slog::o!("version" => "0.5"));
-
-    let myip = match args.myip {
-        Some(ip) => ip,
-        None => {
-            if let Ok(addr) = what_is_my_ip(logger.clone()).await {
-                addr
-            } else {
-                get_unspecified_local_ip(&Mode::Ipv4).into()
-            }
-        }
-    };
-
     let potential_targets = if let Some(single_target) = args.target.target {
-        Ok(vec![(0u64, single_target)])
+        match single_target {
+            TargetDescriptor::Ip(a) => Ok(vec![(0u64, Target::Ip(a))]),
+            TargetDescriptor::Name(b) => Ok(vec![(0u64, Target::Name(b))]),
+            TargetDescriptor::Range(r) => generate_targets_from_range(r, logger.clone()),
+        }
     } else {
         let top_sites_path = args.target.top_sites.unwrap();
         extract_popular_sites(&top_sites_path)
@@ -635,6 +721,17 @@ async fn main() {
         );
         return;
     }
+
+    let myip = match args.myip {
+        Some(ip) => ip,
+        None => {
+            if let Ok(addr) = what_is_my_ip(logger.clone()).await {
+                addr
+            } else {
+                get_unspecified_local_ip(&Mode::Ipv4).into()
+            }
+        }
+    };
 
     let potential_targets = potential_targets.unwrap();
 
@@ -691,10 +788,11 @@ async fn main() {
 
     let mut csv_writer = csv::WriterBuilder::new()
         .has_headers(false)
+        .quote_style(csv::QuoteStyle::Never)
         .from_writer(vec![]);
     let accurecny_results = results.get();
     accurecny_results.iter().for_each(|r| {
-        info!(logger, "Serializing result: {:?}", r);
+        info!(logger, "Serializing result: {:x?}", r);
         csv_writer.serialize(r).unwrap();
     });
     let printable_results = String::from_utf8(csv_writer.into_inner().unwrap()).unwrap();
