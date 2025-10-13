@@ -13,7 +13,7 @@
 
 use std::fmt::Debug;
 use std::io::Write;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, SocketAddrV4, ToSocketAddrs};
 use std::os::fd::AsRawFd;
 
 use clap::Parser;
@@ -21,17 +21,17 @@ use clap_derive::Args;
 use myip::what_is_my_ip;
 use nix::errno::Errno;
 use nix::libc::{
-    epoll_create, epoll_ctl, epoll_event, epoll_wait, EPOLLERR, EPOLLHUP, EPOLLIN, EPOLLPRI, EPOLLRDHUP, EPOLL_CTL_ADD
+    epoll_create, epoll_ctl, epoll_event, epoll_wait, setsockopt, EPOLLERR, EPOLLHUP, EPOLLIN,
+    EPOLLPRI, EPOLLRDHUP, EPOLL_CTL_ADD, IPPROTO_IP, IPTOS_ECN_ECT1, IP_TOS,
 };
 use nix::sys::socket::AddressFamily::Inet;
 use nix::sys::socket::SockProtocol::{self, Tcp as TcpProto};
 use nix::sys::socket::{
-    bind, getsockname, listen, sendto, socket, Backlog, MsgFlags, SockFlag, SockaddrIn6,
-    SockaddrLike,
+    bind, getsockname, listen, sendto, socket, Backlog, MsgFlags, SockFlag, SockaddrLike,
 };
 use nix::sys::socket::{connect, recv, SockaddrIn};
 use pnet::packet::tcp::{ipv4_checksum, Tcp, TcpFlags, TcpOption, TcpOptionPacket, TcpPacket};
-use quic_ecn::{accurate_ecn_quic, AccurecnyQuicResult};
+use quic_ecn::accurate_ecn_quic;
 use rand::distr::{Distribution, Uniform};
 
 use std::time::Duration;
@@ -41,62 +41,13 @@ use pnet::packet::tcp::TcpFlags::{ACK, SYN};
 use pnet::packet::FromPacket;
 use slog::{error, info, warn, Drain, Logger};
 
+use crate::flexible::{FlexibleAddr, FlexibleIp};
+use crate::result::{AccurecnyResult, AccurecnyResults, AccurecnyTcpResult, RESULT_CSV_HEADER};
+
+mod flexible;
 mod myip;
 mod quic_ecn;
-
-#[derive(Debug, Clone)]
-enum FlexibleIp {
-    Ipv4(Ipv4Addr),
-    Ipv6(Ipv6Addr),
-}
-
-impl From<SockaddrIn> for FlexibleIp {
-    fn from(value: SockaddrIn) -> Self {
-        FlexibleIp::Ipv4(value.ip())
-    }
-}
-
-impl From<SockaddrIn6> for FlexibleIp {
-    fn from(value: SockaddrIn6) -> Self {
-        FlexibleIp::Ipv6(value.ip())
-    }
-}
-
-impl From<IpAddr> for FlexibleIp {
-    fn from(value: IpAddr) -> Self {
-        match value {
-            IpAddr::V4(v4) => FlexibleIp::Ipv4(v4),
-            IpAddr::V6(v6) => FlexibleIp::Ipv6(v6),
-        }
-    }
-}
-
-impl From<FlexibleIp> for IpAddr {
-    fn from(value: FlexibleIp) -> Self {
-        match value {
-            FlexibleIp::Ipv4(v4) => IpAddr::V4(v4),
-            FlexibleIp::Ipv6(v6) => IpAddr::V6(v6),
-        }
-    }
-}
-
-impl<'a> From<FlexibleIp> for Box<dyn SockaddrLike + 'a> {
-    fn from(value: FlexibleIp) -> Box<dyn SockaddrLike + 'a> {
-        match value {
-            FlexibleIp::Ipv4(v4) => Box::new(SockaddrIn::from(SocketAddrV4::new(v4, 0))),
-            FlexibleIp::Ipv6(v6) => Box::new(SockaddrIn6::from(SocketAddrV6::new(v6, 0, 0, 0))),
-        }
-    }
-}
-
-impl From<FlexibleIp> for SocketAddr {
-    fn from(value: FlexibleIp) -> Self {
-        match value {
-            FlexibleIp::Ipv4(v4) => SocketAddr::V4(SocketAddrV4::new(v4, 0)),
-            FlexibleIp::Ipv6(v6) => SocketAddr::V6(SocketAddrV6::new(v6, 0, 0, 0)),
-        }
-    }
-}
+mod result;
 
 #[allow(dead_code)]
 enum AccurecnyError {
@@ -197,6 +148,14 @@ struct Cli {
     #[arg(long)]
     myip: Option<IpAddr>,
 
+    /// Set the port on which to attempt HTTP and QUIC connections.
+    #[arg(long, default_value_t = 443u16)]
+    port: u16,
+
+    /// Set ect1 on the outgoing packets.
+    #[arg(long, default_value_t = false)]
+    ecn: bool,
+
     /// The name of a file to store the results.
     #[arg(long, value_parser = clap::value_parser!(clio::ClioPath))]
     output: Option<clio::ClioPath>,
@@ -242,75 +201,6 @@ fn extract_popular_sites(path: &std::path::Path) -> Result<Vec<PopularSite>, std
         results.push(record);
     }
     Ok(results)
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct AccurecnyTcpResult {
-    ip: Option<IpAddr>,
-    success: bool,
-    supported: bool,
-    flags: Option<String>,
-}
-
-impl AccurecnyTcpResult {
-    fn new() -> Self {
-        Self {
-            ip: None,
-            success: false,
-            supported: false,
-            flags: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct AccurecnyResult {
-    source: IpAddr,
-    rank: u64,
-    url: String,
-    tcp: AccurecnyTcpResult,
-    quic: AccurecnyQuicResult,
-}
-
-const RESULT_CSV_HEADER: &str = "source, rank, url, tcp_ip, tcp_success, tcp_supported, tcp_flags, quic_ip, quic_success, transport_params\n";
-
-impl AccurecnyResult {
-    fn new(
-        rank: u64,
-        url: String,
-        source: IpAddr,
-        tcp: AccurecnyTcpResult,
-        quic: AccurecnyQuicResult,
-    ) -> Self {
-        Self {
-            rank,
-            url,
-            source,
-            tcp,
-            quic,
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct AccurecnyResults {
-    results: Vec<AccurecnyResult>,
-}
-
-impl AccurecnyResults {
-    fn new() -> Self {
-        AccurecnyResults {
-            results: Vec::<AccurecnyResult>::new(),
-        }
-    }
-
-    fn add(&mut self, result: AccurecnyResult) {
-        self.results.push(result);
-    }
-
-    fn get(&self) -> Vec<AccurecnyResult> {
-        self.results.clone()
-    }
 }
 
 fn resolve_target(target: Target, logger: slog::Logger) -> Result<Vec<FlexibleIp>, std::io::Error> {
@@ -360,21 +250,25 @@ fn resolve_target(target: Target, logger: slog::Logger) -> Result<Vec<FlexibleIp
     }
 }
 
-fn get_unspecified_local_ip(mode: &Mode) -> FlexibleIp {
+fn get_unspecified_local_ip_addr(mode: &Mode) -> FlexibleAddr {
     match mode {
-        Mode::Ipv4 => FlexibleIp::Ipv4(Ipv4Addr::new(0, 0, 0, 0)),
+        Mode::Ipv4 => FlexibleAddr {
+            ip: FlexibleIp::Ipv4(Ipv4Addr::new(0, 0, 0, 0)),
+            port: 0,
+        },
         Mode::Ipv6 => panic!("Ipv6 is not supported at this time."),
     }
 }
 
 fn accurate_ecn_tcp(
-    test_target_ip: &FlexibleIp,
+    test_target: &FlexibleAddr,
+    ecn: bool,
     _: &String,
     logger: slog::Logger,
 ) -> AccurecnyTcpResult {
     let mut tcp_test_result = AccurecnyTcpResult::new();
 
-    let (domain, protocol) = match test_target_ip {
+    let (domain, protocol) = match test_target.ip {
         FlexibleIp::Ipv4(_) => {
             info!(logger, "Matching mode v4 to set protocol!");
             (Inet, TcpProto)
@@ -385,7 +279,7 @@ fn accurate_ecn_tcp(
         }
     };
 
-    tcp_test_result.ip = Some((*test_target_ip).clone().into());
+    tcp_test_result.ip = Some(test_target.clone().ip.into());
 
     // We know that we are ipv4 now!
 
@@ -405,8 +299,8 @@ fn accurate_ecn_tcp(
     }
     let raw_socket = maybe_raw_socket.unwrap();
 
-    let destination: Box<dyn SockaddrLike> = (*test_target_ip).clone().into();
-    let source: Box<dyn SockaddrLike> = (get_unspecified_local_ip(&Mode::Ipv4)).into();
+    let destination: Box<dyn SockaddrLike> = (*test_target).clone().into();
+    let source: Box<dyn SockaddrLike> = (get_unspecified_local_ip_addr(&Mode::Ipv4)).into();
 
     // This placeholder socket is not directly used. It helps us ask the operating
     // system for exclusive access to an ephemeral port.
@@ -487,7 +381,7 @@ fn accurate_ecn_tcp(
 
     let mut packet_tcp = Tcp {
         source: source.port(),
-        destination: 443,
+        destination: test_target.port,
         sequence: chrono::Local::now().timestamp_subsec_nanos(),
         acknowledgement: 0,
         data_offset: 8,
@@ -502,9 +396,9 @@ fn accurate_ecn_tcp(
 
     // Make a pseudo packet for the calculation of the checksum.
     pseudo_packet.populate(&packet_tcp);
-    let csum = match test_target_ip {
+    let csum = match test_target.ip {
         FlexibleIp::Ipv4(v4) => {
-            ipv4_checksum(&pseudo_packet.consume_to_immutable(), &source.ip(), v4)
+            ipv4_checksum(&pseudo_packet.consume_to_immutable(), &source.ip(), &v4)
         }
         FlexibleIp::Ipv6(_) => {
             panic!("Ipv6 is not supported.");
@@ -517,6 +411,23 @@ fn accurate_ecn_tcp(
     packet_tcp.checksum = csum;
     packet.populate(&packet_tcp);
 
+    if ecn {
+        unsafe {
+            let result = setsockopt(
+                raw_socket.as_raw_fd(),
+                IPPROTO_IP,
+                IP_TOS,
+                &IPTOS_ECN_ECT1 as *const u8 as *const std::ffi::c_void,
+                1,
+            );
+
+            if result < 0 {
+                error!(logger, "Failed to set ECN on socket.");
+                return tcp_test_result;
+            }
+        }
+    }
+
     if let Err(e) = sendto(
         raw_socket.as_raw_fd(),
         &packet_bytes,
@@ -525,9 +436,7 @@ fn accurate_ecn_tcp(
     ) {
         error!(
             logger,
-            "Failed to send SYN packet to {}: {}",
-            Into::<IpAddr>::into((*test_target_ip).clone()),
-            e
+            "Failed to send SYN packet to {:?}: {}", test_target, e
         );
         return tcp_test_result;
     }
@@ -608,7 +517,11 @@ fn accurate_ecn_tcp(
                                                                                      //                               ^ ^
                                                                                      //                              AE SYN
                                                                                      //                                ^
-                                                                                     //                               CWR/ECE/ACK
+                                                                                     //                               CWR/ECE/URG/ACK (always odd because of the ACK)
+                                                                                     //                               1   0   0   1    = 9
+                                                                                     //                               1   1   0   1    = d
+                                                                                     //                               0   0   0   1    = 1
+                                                                                     //                               1   0   0   1    = 9
 
                     )
                 {
@@ -633,7 +546,7 @@ fn accurate_ecn_tcp(
 fn generate_targets_from_range(
     range: IpRangeRatio,
     logger: Logger,
-) -> Result<Vec<(u64, Target)>, std::io::Error> {
+) -> Result<Vec<(Option<u64>, Target)>, std::io::Error> {
     info!(logger, "Generating targets from a range!");
     match range {
         IpRangeRatio {
@@ -661,7 +574,12 @@ fn generate_targets_from_range(
                         false
                     }
                 })
-                .map(|v| (0, Target::Ip(Into::<IpAddr>::into(v.to_be_bytes()).into())))
+                .map(|v| {
+                    (
+                        None,
+                        Target::Ip(Into::<IpAddr>::into(v.to_be_bytes()).into()),
+                    )
+                })
                 .collect())
         }
         IpRangeRatio {
@@ -701,17 +619,21 @@ async fn main() {
         .filter_level(log_level)
         .fuse();
     let logger = slog::Logger::root(drain, slog::o!("version" => "0.5"));
-    let potential_targets = if let Some(single_target) = args.target.target {
-        match single_target {
-            TargetDescriptor::Ip(a) => Ok(vec![(0u64, Target::Ip(a))]),
-            TargetDescriptor::Name(b) => Ok(vec![(0u64, Target::Name(b))]),
+
+    let potential_targets = if let Some(user_target) = args.target.target {
+        match user_target {
+            TargetDescriptor::Ip(a) => Ok(vec![(None, Target::Ip(a))]),
+            TargetDescriptor::Name(b) => Ok(vec![(None, Target::Name(b))]),
             TargetDescriptor::Range(r) => generate_targets_from_range(r, logger.clone()),
         }
     } else {
         let top_sites_path = args.target.top_sites.unwrap();
         extract_popular_sites(&top_sites_path)
-            .map(|list| list.into_iter().map(|x| (x.rank, Target::Name(x.url))))
-            .map(|list| list.collect::<Vec<(u64, Target)>>())
+            .map(|list| {
+                list.into_iter()
+                    .map(|x| (Some(x.rank), Target::Name(x.url)))
+            })
+            .map(|list| list.collect::<Vec<(Option<u64>, Target)>>())
     };
 
     if let Err(e) = potential_targets {
@@ -728,7 +650,7 @@ async fn main() {
             if let Ok(addr) = what_is_my_ip(logger.clone()).await {
                 addr
             } else {
-                get_unspecified_local_ip(&Mode::Ipv4).into()
+                get_unspecified_local_ip_addr(&Mode::Ipv4).ip.into()
             }
         }
     };
@@ -770,10 +692,13 @@ async fn main() {
 
         for target in target.into_iter() {
             if let FlexibleIp::Ipv4(_) = target {
-                let tcp_result =
-                    accurate_ecn_tcp(&target.clone(), &canonical_target, logger.clone());
+                let target = &FlexibleAddr {
+                    ip: target,
+                    port: args.port,
+                };
+                let tcp_result = accurate_ecn_tcp(target, args.ecn, &canonical_target, logger.clone());
                 let quic_result =
-                    accurate_ecn_quic(&target.clone(), &canonical_target, logger.clone()).await;
+                    accurate_ecn_quic(target, args.ecn, &canonical_target, logger.clone()).await;
 
                 results.add(AccurecnyResult::new(
                     *rank,
@@ -782,6 +707,11 @@ async fn main() {
                     tcp_result,
                     quic_result,
                 ));
+            } else {
+                info!(
+                    logger,
+                    "Skipping IPv6 address ({:?}) for {}", target, canonical_target
+                );
             }
         }
     }

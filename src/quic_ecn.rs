@@ -1,27 +1,23 @@
 use std::fmt::{Debug, Display};
 use std::io::Write;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use mio::net::UdpSocket;
+use nix::libc::{setsockopt, IPPROTO_IP, IPTOS_ECN_ECT1, IP_TOS};
 use quiche::{Config, ConnectionId, TransportParams};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::ser::SerializeStruct;
 use serde::Serialize;
 use slog::{error, info, Logger};
+use std::os::fd::AsRawFd;
 use std::string::ToString;
 
-use crate::{get_unspecified_local_ip, FlexibleIp, Mode};
+use crate::result::AccurecnyQuicResult;
+use crate::{get_unspecified_local_ip_addr, FlexibleAddr, Mode};
 
 #[derive(Debug, Clone)]
-struct SerializableTransportParams(TransportParams);
-
-#[derive(Debug, Clone)]
-pub struct AccurecnyQuicResult {
-    ip: Option<IpAddr>,
-    success: bool,
-    params: Option<SerializableTransportParams>,
-}
+pub struct SerializableTransportParams(TransportParams);
 
 impl Serialize for AccurecnyQuicResult {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -233,7 +229,8 @@ fn send_entire_packet(
 }
 
 pub async fn accurate_ecn_quic(
-    ip: &FlexibleIp,
+    target: &FlexibleAddr,
+    ecn: bool,
     name: &str,
     logger: slog::Logger,
 ) -> AccurecnyQuicResult {
@@ -272,13 +269,13 @@ pub async fn accurate_ecn_quic(
     }
 
     let mut quic_test_result = AccurecnyQuicResult::new();
-    quic_test_result.ip = Some((*ip).clone().into());
+    quic_test_result.ip = Some(target.clone().ip.into());
 
     // Setup the event loop.
     let mut poll = mio::Poll::new().unwrap();
     let mut events = mio::Events::with_capacity(1024);
 
-    let source: SocketAddr = get_unspecified_local_ip(&Mode::Ipv4).into();
+    let source: SocketAddr = get_unspecified_local_ip_addr(&Mode::Ipv4).into();
 
     // Create the UDP socket backing the QUIC connection, and register it with
     // the event loop.
@@ -305,7 +302,24 @@ pub async fn accurate_ecn_quic(
     let scid = generate_scid();
 
     let local_addr = connection_socket.local_addr().unwrap();
-    let server_addr: SocketAddr = ((*ip).clone(), 443).into();
+    let server_addr: SocketAddr = (target.clone()).into();
+
+    if ecn {
+        unsafe {
+            let result = setsockopt(
+                connection_socket.as_raw_fd(),
+                IPPROTO_IP,
+                IP_TOS,
+                &IPTOS_ECN_ECT1 as *const u8 as *const std::ffi::c_void,
+                1,
+            );
+
+            if result < 0 {
+                error!(logger, "Failed to set ECN on socket.");
+                return quic_test_result;
+            }
+        }
+    }
 
     // Create a QUIC connection and initiate handshake.
     let mut conn =
