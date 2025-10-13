@@ -252,7 +252,6 @@ pub async fn accurate_ecn_quic(
         config.set_max_connection_window(25165824);
         config.set_max_stream_window(16777216);
         config.enable_track_unknown_transport_parameters(1024);
-        config.set_version_information(Some((1, Some(vec![1]))));
         config.log_keys();
         config
     }
